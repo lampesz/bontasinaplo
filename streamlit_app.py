@@ -1,17 +1,12 @@
 # streamlit_app.py
 # Bontásinapló – vizuális, érintőbarát MVP
-# Fő funkciók:
-# - Törzsadatok: Állatok kezelése (új/átnevez/deaktivál), részek kezelése (új/átnevez/deaktivál)
-# - ERP-kapcsolás: állat+rész → ERP tétel (PG-ből töltve)
-# - Rögzítés: részek felvétele érintő billentyűzettel, hozam számítás, mellékletek (fotó/PDF)
-# - Lezárás: teljes payload küldése outboxon át PostgreSQL-be, opcionális VIR HTTP JSON
-# - Felső (fejléc) menü (streamlit-option-menu), fallback gombsorral
+# Fő újdonság: PostgreSQL jelszó biztonságos kezelése (Keyring/Keychain), felső menü, duplikált gomb-ID-k fix
 #
 # Indítás:
 #   pip install streamlit pandas sqlalchemy requests psycopg2-binary
-#   pip install streamlit-option-menu   # (ajánlott)
-#   pip install reportlab               # (PDF exporthoz)
-#   streamlit run streamlit_app.py
+#   pip install streamlit-option-menu
+#   pip install reportlab            # (PDF export)
+#   pip install keyring              # (jelszó a rendszer kulcstárában)
 
 import streamlit as st
 import pandas as pd
@@ -25,6 +20,7 @@ import socket
 import requests
 import hmac, hashlib
 import threading, time
+from urllib.parse import quote_plus
 
 st.set_page_config(page_title="Bontásinapló", page_icon="🥩", layout="wide")
 
@@ -35,19 +31,26 @@ try:
 except Exception:
     HAS_OPT_MENU = False
 
-# --- Alapértelmezett állatok + részek (seed, működés már DB-alapú) ---
+# Biztonságos jelszó-tárolás (kulcstár)
+try:
+    import keyring
+    HAS_KEYRING = True
+except Exception:
+    HAS_KEYRING = False
+
+# --- Alapértelmezett állatok + részek (seed) ---
 SEED_ANIMALS = {
     "Sertés": [
-        "Comb", "Lapocka", "Karaj", "Tarja", "Csülök (első)", "Csülök (hátsó)",
-        "Oldalas", "Szalonna", "Fej", "Bőr", "Csont", "Belsőség", "Zsiradék", "Húsnyesedék"
+        "Comb","Lapocka","Karaj","Tarja","Csülök (első)","Csülök (hátsó)",
+        "Oldalas","Szalonna","Fej","Bőr","Csont","Belsőség","Zsiradék","Húsnyesedék"
     ],
     "Marha": [
-        "Hátszín", "Bélszín", "Lapos hátszín", "Comb", "Lábszár", "Lapocka",
-        "Nyak", "Szegy", "Fej", "Csont", "Zsiradék", "Húsnyesedék"
+        "Hátszín","Bélszín","Lapos hátszín","Comb","Lábszár","Lapocka",
+        "Nyak","Szegy","Fej","Csont","Zsiradék","Húsnyesedék"
     ],
     "Szárnyas": [
-        "Mellfilé", "Felsőcomb", "Alsócomb", "Szárny", "Hát-farhát", "Aprólék",
-        "Bőr", "Csont", "Húsnyesedék"
+        "Mellfilé","Felsőcomb","Alsócomb","Szárny","Hát-farhát","Aprólék",
+        "Bőr","Csont","Húsnyesedék"
     ],
 }
 
@@ -160,15 +163,12 @@ with engine.begin() as conn:
 # --- Seed (idempotens) ---
 def seed_defaults():
     with engine.begin() as conn:
-        # Alap állatok (idempotens)
         for a in SEED_ANIMALS.keys():
             conn.execute(text("INSERT OR IGNORE INTO animals(name, active) VALUES (:n, 1)"), {"n": a})
-        # Batches-ből ismert állatok felvétele (idempotens)
         batch_animals = [r[0] for r in conn.execute(text("SELECT DISTINCT allat FROM batches")).fetchall()]
         for a in batch_animals:
             if a:
                 conn.execute(text("INSERT OR IGNORE INTO animals(name, active) VALUES (:n, 1)"), {"n": a})
-        # Részek seed
         for a, parts in SEED_ANIMALS.items():
             for p in parts:
                 conn.execute(text("""
@@ -176,7 +176,6 @@ def seed_defaults():
                     SELECT :a, :p, 1
                     WHERE NOT EXISTS (SELECT 1 FROM custom_parts WHERE animal=:a AND name=:p)
                 """), {"a": a, "p": p})
-
 seed_defaults()
 
 # --- Settings ---
@@ -315,7 +314,7 @@ def get_mappings(animal: str = None) -> pd.DataFrame:
             "SELECT animal, part_name, erp_id, erp_name, erp_code, created_at FROM part_mappings ORDER BY animal, part_name",
             engine)
     except Exception:
-        return pd.DataFrame(columns=["animal", "part_name", "erp_id", "erp_name", "erp_code", "created_at"])
+        return pd.DataFrame(columns=["animal","part_name","erp_id","erp_name","erp_code","created_at"])
 
 def upsert_mapping(animal: str, part_name: str, erp_id: str, erp_name: str = None, erp_code: str = None):
     ts = datetime.now().isoformat(timespec="seconds")
@@ -348,171 +347,75 @@ def set_vir_config(url: str, api_key: str, secret: str, auto: bool):
     set_setting("vir_secret", secret or "")
     set_setting("vir_auto_send", "1" if auto else "0")
 
-# --- Batch státusz ---
-def get_batch_status(batch_id: int) -> str:
-    with engine.begin() as conn:
-        row = conn.execute(text("SELECT status FROM batches WHERE id=:id"), {"id": batch_id}).fetchone()
-    return (row[0] if row else "open") or "open"
+# --- PG konfiguráció (mezők + kulcstár) ---
+def _pg_key_id(host: str, port: int, db: str, user: str) -> str:
+    return f"{user}@{host}:{port}/{db}"
 
-def close_batch(batch_id: int) -> bool:
-    if get_batch_status(batch_id) == "closed":
-        return False
-    with engine.begin() as conn:
-        conn.execute(text("UPDATE batches SET status='closed', closed_at=:ts WHERE id=:id"),
-                     {"ts": datetime.now().isoformat(timespec="seconds"), "id": batch_id})
-    return True
+def get_pg_conn_fields():
+    host = get_setting("pg_host", "")
+    port = int(get_setting("pg_port", "5432") or 5432)
+    db   = get_setting("pg_db", "")
+    user = get_setting("pg_user", "")
+    sslmode = get_setting("pg_sslmode", "prefer")  # optional
+    saved = False
+    if HAS_KEYRING and host and db and user:
+        try:
+            pw = keyring.get_password("Bontasinaplo", _pg_key_id(host, port, db, user))
+            saved = pw is not None
+        except Exception:
+            saved = False
+    return {"host": host, "port": port, "db": db, "user": user, "sslmode": sslmode, "password_saved": saved}
 
-def reopen_batch(batch_id: int) -> bool:
-    if get_batch_status(batch_id) != "closed":
-        return False
-    with engine.begin() as conn:
-        conn.execute(text("UPDATE batches SET status='open', closed_at=NULL WHERE id=:id"), {"id": batch_id})
-    return True
+def set_pg_conn_fields(host: str, port: int, db: str, user: str, password: str = None, sslmode: str = "prefer"):
+    set_setting("pg_host", host or "")
+    set_setting("pg_port", str(int(port or 5432)))
+    set_setting("pg_db", db or "")
+    set_setting("pg_user", user or "")
+    set_setting("pg_sslmode", sslmode or "prefer")
+    # NE tárolj régi DSN-t a settings-ben
+    set_setting("pg_dsn", "")
+    # jelszó kulcstárba
+    if password and password.strip():
+        if HAS_KEYRING:
+            try:
+                keyring.set_password("Bontasinaplo", _pg_key_id(host, int(port or 5432), db, user), password.strip())
+            except Exception as e:
+                st.warning(f"Nem sikerült a jelszót kulcstárba menteni: {e}")
+        else:
+            st.warning("A keyring nincs telepítve – a jelszót nem tudom biztonságosan elmenteni. Telepítsd: pip install keyring")
 
-# --- Payloadok (ERP mapping beemelve; parts → tetel_id/erp_*) ---
-def build_full_batch_payload(batch_row, parts_df):
-    try:
-        osszeg = float(parts_df['tomeg'].sum()) if parts_df is not None and not parts_df.empty else 0.0
-    except Exception:
-        osszeg = 0.0
-    be = float(batch_row["ossztomeg"]) if "ossztomeg" in batch_row else float(batch_row.get("ossztomeg", 0.0))
-    hozam = (osszeg / be * 100.0) if be > 0 else 0.0
-    diff = be - osszeg
+def clear_pg_saved_password(host: str, port: int, db: str, user: str):
+    if HAS_KEYRING and host and db and user:
+        try:
+            keyring.delete_password("Bontasinaplo", _pg_key_id(host, int(port or 5432), db, user))
+            st.success("Mentett jelszó törölve a kulcstárból.")
+        except keyring.errors.PasswordDeleteError:
+            st.info("Nem volt elmentett jelszó.")
+        except Exception as e:
+            st.warning(f"Jelszó törlés hiba: {e}")
 
-    animal_name = str(batch_row["allat"]) if "allat" in batch_row else str(batch_row.get("allat"))
+def build_pg_dsn(host: str, port: int, db: str, user: str, password: str = None, sslmode: str = "prefer") -> str:
+    if not (host and db and user):
+        return ""
+    pw = quote_plus(password or "")
+    # psycopg2 driverrel
+    dsn = f"postgresql+psycopg2://{user}:{pw}@{host}:{int(port)}/{db}"
+    # sslmode opcionális: SQLAlchemy URL query résszel lehetne, de a legtöbb helyi hálón nem szükséges
+    return dsn
 
-    # ERP mapping betöltése egyszer
-    try:
-        map_df = pd.read_sql(
-            "SELECT part_name, erp_id, erp_name, erp_code FROM part_mappings WHERE animal = ?",
-            engine, params=(animal_name,))
-        mapping = {
-            row["part_name"]: {
-                "erp_id": str(row["erp_id"]) if pd.notna(row["erp_id"]) else None,
-                "erp_name": (row["erp_name"] if "erp_name" in row and pd.notna(row["erp_name"]) else None),
-                "erp_code": (row["erp_code"] if "erp_code" in row and pd.notna(row["erp_code"]) else None),
-            }
-            for _, row in map_df.iterrows()
-        } if map_df is not None and not map_df.empty else {}
-    except Exception:
-        mapping = {}
-
-    parts = []
-    if parts_df is not None and not parts_df.empty:
-        for r in parts_df.to_dict("records"):
-            pname = r.get("resz")
-            pobj = {
-                "name": pname,
-                "weight_kg": float(r.get("tomeg", 0.0)),
-                "note": r.get("megjegyzes"),
-            }
-            m = mapping.get(pname)
-            if m:
-                pobj["tetel_id"] = m["erp_id"]           # kért mező
-                pobj["erp_id"] = m["erp_id"]
-                if m.get("erp_code") is not None:
-                    pobj["erp_code"] = m["erp_code"]
-                if m.get("erp_name") is not None:
-                    pobj["erp_name"] = m["erp_name"]
-            parts.append(pobj)
-
-    return {
-        "source": {"system": "Bontasinaplo", "device": socket.gethostname()},
-        "event": "batch_closed",
-        "batch": {
-            "id": int(batch_row["id"]) if "id" in batch_row else int(batch_row.get("id", 0)),
-            "date": str(batch_row["datum"]) if "datum" in batch_row else str(batch_row.get("datum")),
-            "animal": animal_name,
-            "gross_weight_kg": be,
-            "lot": (batch_row["tetel_azon"] if "tetel_azon" in batch_row else batch_row.get("tetel_azon")),
-            "supplier": (batch_row["beszallito"] if "beszallito" in batch_row else batch_row.get("beszallito")),
-            "origin": (batch_row["eredet"] if "eredet" in batch_row else batch_row.get("eredet")),
-            "inspector": (batch_row["ellenorzo"] if "ellenorzo" in batch_row else batch_row.get("ellenorzo")),
-            "note": (batch_row["megjegyzes"] if "megjegyzes" in batch_row else batch_row.get("megjegyzes")),
-            "closed_at": (batch_row.get("closed_at") if isinstance(batch_row, dict) else None),
-        },
-        "parts": parts,
-        "summary": {"sum_kg": osszeg, "yield_pct": hozam, "diff_kg": diff}
-    }
-
-def build_part_payload(batch_row, part_dict):
-    animal_name = str(batch_row["allat"]) if "allat" in batch_row else str(batch_row.get("allat"))
-    pname = part_dict.get("resz")
-
-    tetel_id = None; erp_code = None; erp_name = None
-    try:
-        mdf = pd.read_sql(
-            "SELECT erp_id, erp_name, erp_code FROM part_mappings WHERE animal = ? AND part_name = ? LIMIT 1",
-            engine, params=(animal_name, pname))
-        if mdf is not None and not mdf.empty:
-            row = mdf.iloc[0]
-            tetel_id = str(row["erp_id"]) if pd.notna(row["erp_id"]) else None
-            erp_code = row["erp_code"] if ("erp_code" in row and pd.notna(row["erp_code"])) else None
-            erp_name = row["erp_name"] if ("erp_name" in row and pd.notna(row["erp_name"])) else None
-    except Exception:
-        pass
-
-    part_obj = {
-        "name": pname,
-        "weight_kg": float(part_dict.get("tomeg", 0.0)),
-        "note": part_dict.get("megjegyzes"),
-    }
-    if tetel_id is not None:
-        part_obj["tetel_id"] = tetel_id
-        part_obj["erp_id"] = tetel_id
-    if erp_code is not None:
-        part_obj["erp_code"] = erp_code
-    if erp_name is not None:
-        part_obj["erp_name"] = erp_name
-
-    return {
-        "source": {"system": "Bontasinaplo", "device": socket.gethostname()},
-        "event": "part_created",
-        "batch": {
-            "id": int(batch_row["id"]) if "id" in batch_row else int(batch_row.get("id", 0)),
-            "date": str(batch_row["datum"]) if "datum" in batch_row else str(batch_row.get("datum")),
-            "animal": animal_name,
-        },
-        "part": part_obj
-    }
-
-# --- Log + HMAC + VIR küldés ---
-def log_sync(batch_id, event, endpoint, payload, status, http_status=None, response=None):
-    with engine.begin() as conn:
-        conn.execute(text("""
-            INSERT INTO sync_log(batch_id, event, endpoint, payload, status, http_status, response, created_at)
-            VALUES (:batch_id, :event, :endpoint, :payload, :status, :http_status, :response, :created_at)
-        """), {
-            "batch_id": batch_id,
-            "event": event,
-            "endpoint": endpoint,
-            "payload": payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False),
-            "status": status,
-            "http_status": http_status,
-            "response": response,
-            "created_at": datetime.now().isoformat(timespec="seconds"),
-        })
-
-def hmac_sign(secret: str, body: bytes) -> str:
-    return hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
-
-def send_json_to_vir(payload, url: str, api_key: str = None, secret: str = None, event: str = None, batch_id: int = None) -> bool:
-    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    headers = {"Content-Type": "application/json"}
-    if api_key: headers["X-API-Key"] = api_key
-    if secret:  headers["X-Signature"] = hmac_sign(secret, body)
-    try:
-        r = requests.post(url, data=body, headers=headers, timeout=10)
-        ok = 200 <= r.status_code < 300
-        log_sync(batch_id, event or "push", url, body.decode("utf-8"), "ok" if ok else "error", r.status_code, r.text)
-        return ok
-    except Exception as e:
-        log_sync(batch_id, event or "push", url, body.decode("utf-8"), "error", None, str(e))
-        return False
-
-# --- PG outbox + config ---
 def get_pg_config():
-    dsn = get_setting("pg_dsn", "")
+    # Elsőként a mező-alapú + kulcstáras DSN-t próbáljuk
+    f = get_pg_conn_fields()
+    pw = None
+    if HAS_KEYRING and f["host"] and f["db"] and f["user"]:
+        try:
+            pw = keyring.get_password("Bontasinaplo", _pg_key_id(f["host"], f["port"], f["db"], f["user"]))
+        except Exception:
+            pw = None
+    dsn = build_pg_dsn(f["host"], f["port"], f["db"], f["user"], pw, f["sslmode"])
+    # Visszafelé kompatibilitás: ha nincs mező-alapú DSN, használjuk a régi pg_dsn értéket (NEM jelenítjük meg)
+    if not dsn:
+        dsn = get_setting("pg_dsn", "")
     auto_send = get_setting("pg_auto_send", "0") == "1"
     try:
         interval = int(get_setting("pg_auto_interval", "60") or 60)
@@ -520,8 +423,7 @@ def get_pg_config():
         interval = 60
     return dsn, auto_send, interval
 
-def set_pg_config(dsn: str, auto_send: bool, interval: int):
-    set_setting("pg_dsn", dsn or "")
+def set_pg_config_compat(auto_send: bool, interval: int):
     set_setting("pg_auto_send", "1" if auto_send else "0")
     set_setting("pg_auto_interval", str(int(interval or 60)))
 
@@ -544,7 +446,6 @@ def pg_insert_payload(dsn: str, payload_json: str):
 def queue_pg_payload(payload, batch_id: int, event: str, dsn: str = None, auto: bool = True):
     payload_json = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False)
     now = datetime.now().isoformat(timespec="seconds")
-    # duplikáció-védelem (ugyanarra az eventre és batchre egyszer)
     with engine.begin() as conn:
         exists = conn.execute(text(
             "SELECT id FROM pg_outbox WHERE batch_id=:b AND event=:e AND status IN ('pending','processing','sent') LIMIT 1"
@@ -556,7 +457,6 @@ def queue_pg_payload(payload, batch_id: int, event: str, dsn: str = None, auto: 
             INSERT INTO pg_outbox(batch_id, event, payload, status, tries, created_at)
             VALUES (:batch_id, :event, :payload, 'pending', 0, :created_at)
         """), {"batch_id": batch_id, "event": event, "payload": payload_json, "created_at": now})
-    # Első próbálkozás azonnal, ha van DSN
     if dsn:
         flush_pg_outbox(dsn, max_items=10)
 
@@ -566,11 +466,9 @@ def _backoff_seconds(tries: int) -> int:
 FLUSH_LOCK = threading.Lock()
 
 def flush_pg_outbox(dsn: str, max_items: int = 50) -> bool:
-    """Outbox ürítése. 'processing' foglalással és globális zárral véd a párhuzamos küldéstől."""
     ok, _ = test_pg_connection(dsn)
     if not ok:
         return False
-
     acquired = FLUSH_LOCK.acquire(timeout=5)
     try:
         now_iso = datetime.now().isoformat(timespec="seconds")
@@ -582,16 +480,13 @@ def flush_pg_outbox(dsn: str, max_items: int = 50) -> bool:
             """), {"now": now_iso, "lim": max_items}).fetchall()
         if not rows:
             return True
-
         for r in rows:
             rid = int(r[0]); payload_json = r[1]; tries = int(r[2] or 0)
-            # Foglalás
             with engine.begin() as conn:
                 res = conn.execute(text("UPDATE pg_outbox SET status='processing' WHERE id=:id AND status='pending'"),
                                    {"id": rid})
                 if getattr(res, "rowcount", 0) == 0:
-                    continue  # már foglalta más
-
+                    continue
             try:
                 pg_insert_payload(dsn, payload_json)
                 with engine.begin() as conn:
@@ -633,19 +528,156 @@ def start_pg_bg_flusher():
             except Exception:
                 time.sleep(30)
     threading.Thread(target=_loop, daemon=True).start()
-
 start_pg_bg_flusher()
+
+# --- Batch státusz + payloadok (ERP adatokkal) ---
+def get_batch_status(batch_id: int) -> str:
+    with engine.begin() as conn:
+        row = conn.execute(text("SELECT status FROM batches WHERE id=:id"), {"id": batch_id}).fetchone()
+    return (row[0] if row else "open") or "open"
+
+def close_batch(batch_id: int) -> bool:
+    if get_batch_status(batch_id) == "closed":
+        return False
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE batches SET status='closed', closed_at=:ts WHERE id=:id"),
+                     {"ts": datetime.now().isoformat(timespec="seconds"), "id": batch_id})
+    return True
+
+def reopen_batch(batch_id: int) -> bool:
+    if get_batch_status(batch_id) != "closed":
+        return False
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE batches SET status='open', closed_at=NULL WHERE id=:id"), {"id": batch_id})
+    return True
+
+def build_full_batch_payload(batch_row, parts_df):
+    try:
+        osszeg = float(parts_df['tomeg'].sum()) if parts_df is not None and not parts_df.empty else 0.0
+    except Exception:
+        osszeg = 0.0
+    be = float(batch_row["ossztomeg"]) if "ossztomeg" in batch_row else float(batch_row.get("ossztomeg", 0.0))
+    hozam = (osszeg / be * 100.0) if be > 0 else 0.0
+    diff = be - osszeg
+    animal_name = str(batch_row["allat"]) if "allat" in batch_row else str(batch_row.get("allat"))
+    try:
+        map_df = pd.read_sql(
+            "SELECT part_name, erp_id, erp_name, erp_code FROM part_mappings WHERE animal = ?",
+            engine, params=(animal_name,))
+        mapping = {
+            row["part_name"]: {
+                "erp_id": str(row["erp_id"]) if pd.notna(row["erp_id"]) else None,
+                "erp_name": (row["erp_name"] if "erp_name" in row and pd.notna(row["erp_name"]) else None),
+                "erp_code": (row["erp_code"] if "erp_code" in row and pd.notna(row["erp_code"]) else None),
+            }
+            for _, row in map_df.iterrows()
+        } if map_df is not None and not map_df.empty else {}
+    except Exception:
+        mapping = {}
+    parts = []
+    if parts_df is not None and not parts_df.empty:
+        for r in parts_df.to_dict("records"):
+            pname = r.get("resz")
+            pobj = {"name": pname, "weight_kg": float(r.get("tomeg", 0.0)), "note": r.get("megjegyzes")}
+            m = mapping.get(pname)
+            if m:
+                pobj["tetel_id"] = m["erp_id"]
+                pobj["erp_id"] = m["erp_id"]
+                if m.get("erp_code") is not None: pobj["erp_code"] = m["erp_code"]
+                if m.get("erp_name") is not None: pobj["erp_name"] = m["erp_name"]
+            parts.append(pobj)
+    return {
+        "source": {"system": "Bontasinaplo", "device": socket.gethostname()},
+        "event": "batch_closed",
+        "batch": {
+            "id": int(batch_row["id"]) if "id" in batch_row else int(batch_row.get("id", 0)),
+            "date": str(batch_row["datum"]) if "datum" in batch_row else str(batch_row.get("datum")),
+            "animal": animal_name,
+            "gross_weight_kg": be,
+            "lot": (batch_row["tetel_azon"] if "tetel_azon" in batch_row else batch_row.get("tetel_azon")),
+            "supplier": (batch_row["beszallito"] if "beszallito" in batch_row else batch_row.get("beszallito")),
+            "origin": (batch_row["eredet"] if "eredet" in batch_row else batch_row.get("eredet")),
+            "inspector": (batch_row["ellenorzo"] if "ellenorzo" in batch_row else batch_row.get("ellenorzo")),
+            "note": (batch_row["megjegyzes"] if "megjegyzes" in batch_row else batch_row.get("megjegyzes")),
+            "closed_at": (batch_row.get("closed_at") if isinstance(batch_row, dict) else None),
+        },
+        "parts": parts,
+        "summary": {"sum_kg": osszeg, "yield_pct": hozam, "diff_kg": diff}
+    }
+
+def build_part_payload(batch_row, part_dict):
+    animal_name = str(batch_row["allat"]) if "allat" in batch_row else str(batch_row.get("allat"))
+    pname = part_dict.get("resz")
+    tetel_id = None; erp_code = None; erp_name = None
+    try:
+        mdf = pd.read_sql(
+            "SELECT erp_id, erp_name, erp_code FROM part_mappings WHERE animal = ? AND part_name = ? LIMIT 1",
+            engine, params=(animal_name, pname))
+        if mdf is not None and not mdf.empty:
+            row = mdf.iloc[0]
+            tetel_id = str(row["erp_id"]) if pd.notna(row["erp_id"]) else None
+            erp_code = row["erp_code"] if ("erp_code" in row and pd.notna(row["erp_code"])) else None
+            erp_name = row["erp_name"] if ("erp_name" in row and pd.notna(row["erp_name"])) else None
+    except Exception:
+        pass
+    part_obj = {"name": pname, "weight_kg": float(part_dict.get("tomeg", 0.0)), "note": part_dict.get("megjegyzes")}
+    if tetel_id is not None:
+        part_obj["tetel_id"] = tetel_id
+        part_obj["erp_id"] = tetel_id
+    if erp_code is not None: part_obj["erp_code"] = erp_code
+    if erp_name is not None: part_obj["erp_name"] = erp_name
+    return {
+        "source": {"system": "Bontasinaplo", "device": socket.gethostname()},
+        "event": "part_created",
+        "batch": {
+            "id": int(batch_row["id"]) if "id" in batch_row else int(batch_row.get("id", 0)),
+            "date": str(batch_row["datum"]) if "datum" in batch_row else str(batch_row.get("datum")),
+            "animal": animal_name,
+        },
+        "part": part_obj
+    }
+
+# --- Log + HMAC + VIR ---
+def log_sync(batch_id, event, endpoint, payload, status, http_status=None, response=None):
+    with engine.begin() as conn:
+        conn.execute(text("""
+            INSERT INTO sync_log(batch_id, event, endpoint, payload, status, http_status, response, created_at)
+            VALUES (:batch_id, :event, :endpoint, :payload, :status, :http_status, :response, :created_at)
+        """), {
+            "batch_id": batch_id,
+            "event": event,
+            "endpoint": endpoint,
+            "payload": payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False),
+            "status": status,
+            "http_status": http_status,
+            "response": response,
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+        })
+
+def hmac_sign(secret: str, body: bytes) -> str:
+    return hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+
+def send_json_to_vir(payload, url: str, api_key: str = None, secret: str = None, event: str = None, batch_id: int = None) -> bool:
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    if api_key: headers["X-API-Key"] = api_key
+    if secret:  headers["X-Signature"] = hmac_sign(secret, body)
+    try:
+        r = requests.post(url, data=body, headers=headers, timeout=10)
+        ok = 200 <= r.status_code < 300
+        log_sync(batch_id, event or "push", url, body.decode("utf-8"), "ok" if ok else "error", r.status_code, r.text)
+        return ok
+    except Exception as e:
+        log_sync(batch_id, event or "push", url, body.decode("utf-8"), "error", None, str(e))
+        return False
 
 # --- Adat-hozzáférés ---
 def get_batches():
     return pd.read_sql("SELECT * FROM batches ORDER BY id DESC", engine)
 
 def get_parts(batch_id: int):
-    df = pd.read_sql(
-        "SELECT id, resz, tomeg, megjegyzes FROM parts WHERE batch_id = ? ORDER BY id DESC",
-        engine, params=(batch_id,)
-    )
-    return df
+    return pd.read_sql("SELECT id, resz, tomeg, megjegyzes FROM parts WHERE batch_id = ? ORDER BY id DESC",
+                       engine, params=(batch_id,))
 
 def save_batch(data: dict) -> int:
     with engine.begin() as conn:
@@ -664,7 +696,6 @@ def save_part(batch_id: int, resz: str, tomeg: float, megjegyzes: str = ""):
         """), {"batch_id": batch_id, "resz": resz, "tomeg": tomeg, "megjegyzes": megjegyzes})
 
 def delete_part(part_id: int) -> bool:
-    """Törlés csak nyitott tételből engedett."""
     with engine.begin() as conn:
         row = conn.execute(text("SELECT batch_id FROM parts WHERE id = :id"), {"id": part_id}).fetchone()
         if not row:
@@ -698,12 +729,8 @@ def save_attachment(batch_id: int, file_bytes: bytes, filename: str, mime: str, 
             INSERT INTO attachments(batch_id, kind, path, mime, created_at, note)
             VALUES (:batch_id, :kind, :path, :mime, :created_at, :note)
         """), {
-            "batch_id": batch_id,
-            "kind": kind,
-            "path": path,
-            "mime": mime,
-            "created_at": datetime.now().isoformat(timespec="seconds"),
-            "note": note
+            "batch_id": batch_id, "kind": kind, "path": path, "mime": mime,
+            "created_at": datetime.now().isoformat(timespec="seconds"), "note": note
         })
     return path
 
@@ -716,12 +743,12 @@ def load_erp_items(dsn: str, ceg_id: int = 3) -> pd.DataFrame:
 
 def pick_erp_columns(df: pd.DataFrame):
     cols = list(df.columns)
-    id_col = next((c for c in ["id", "tetel_id"] if c in cols), cols[0] if cols else None)
-    name_col = next((c for c in ["megnevezes", "nev", "leiras", "megnevezes_hu"] if c in cols), cols[1] if len(cols) > 1 else cols[0])
-    code_col = next((c for c in ["cikkszam", "kod", "sku", "termekkod"] if c in cols), None)
+    id_col = next((c for c in ["id","tetel_id"] if c in cols), cols[0] if cols else None)
+    name_col = next((c for c in ["megnevezes","nev","leiras","megnevezes_hu"] if c in cols), cols[1] if len(cols)>1 else cols[0])
+    code_col = next((c for c in ["cikkszam","kod","sku","termekkod"] if c in cols), None)
     return id_col, name_col, code_col
 
-# --- PDF export (ReportLab – opcionális) ---
+# --- PDF export ---
 try:
     from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image as RLImage
     from reportlab.lib import colors
@@ -753,7 +780,7 @@ def build_pdf(batch_row, parts_df, attachments_df):
         elems.append(Paragraph(m, styles['Normal']))
     elems.append(Spacer(1, 8))
 
-    data = [["Rész", "Tömeg (kg)", "Megjegyzés"]]
+    data = [["Rész","Tömeg (kg)","Megjegyzés"]]
     for _, r in parts_df.iterrows():
         data.append([r['resz'], f"{r['tomeg']:.2f}", r.get('megjegyzes') or ""])
     t = Table(data, colWidths=[80*mm, 30*mm, 60*mm])
@@ -810,7 +837,7 @@ input, select, textarea { font-size: 1.1rem !important; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- Oldalak ---
+# --- Oldalak (Settings + Mappings + Rögzítés) ---
 def render_settings_page():
     st.header("Beállítások / Integrációk")
 
@@ -826,14 +853,37 @@ def render_settings_page():
 
     st.markdown("---")
 
-    # PG
+    # PostgreSQL – MEZŐK + KULCSTÁR
     st.subheader("PostgreSQL integráció (JSON → api.api_bontasi_naplo)")
-    def_pg_dsn = get_setting("pg_dsn", "") or os.environ.get("PG_DSN", "")
-    pg_dsn = st.text_input("PostgreSQL DSN", value=def_pg_dsn, placeholder="postgresql+psycopg2://user:pass@host:5432/dbname")
+    if not HAS_KEYRING:
+        st.warning("A jelszó biztonságos tárolásához telepítsd a keyring csomagot: `pip install keyring`")
+
+    f = get_pg_conn_fields()
+    c1, c2, c3, c4 = st.columns([1,1,1,1])
+    with c1:
+        host = st.text_input("Host", value=f["host"], key="pg_host")
+    with c2:
+        port = st.number_input("Port", min_value=1, value=int(f["port"] or 5432), step=1, key="pg_port")
+    with c3:
+        db = st.text_input("Adatbázis", value=f["db"], key="pg_db")
+    with c4:
+        user = st.text_input("Felhasználó", value=f["user"], key="pg_user")
+
+    pw_placeholder = "(mentve a kulcstárban)" if f["password_saved"] else ""
+    password_input = st.text_input("Jelszó", type="password", value="", placeholder=pw_placeholder, key="pg_password")
+
     colpg1, colpg2, colpg3, colpg4 = st.columns([1,1,1,1])
     with colpg1:
         if st.button("Kapcsolat teszt (PG)", key="pg_test_btn"):
-            ok, msg = test_pg_connection(pg_dsn)
+            test_pw = password_input.strip() if password_input else None
+            # ha nincs friss jelszó, olvassuk a kulcstárból
+            if not test_pw and HAS_KEYRING and host and db and user:
+                try:
+                    test_pw = keyring.get_password("Bontasinaplo", _pg_key_id(host, int(port or 5432), db, user))
+                except Exception:
+                    test_pw = None
+            dsn_try = build_pg_dsn(host, port, db, user, test_pw)
+            ok, msg = test_pg_connection(dsn_try)
             if ok: st.success("PG kapcsolat OK")
             else:  st.error(msg)
     with colpg2:
@@ -842,8 +892,20 @@ def render_settings_page():
         pg_interval = st.number_input("Háttérküldés (mp)", min_value=10, step=10, value=int(get_setting("pg_auto_interval","60") or 60), key="pg_interval_num")
     with colpg4:
         if st.button("PG beállítások mentése", key="pg_save_btn"):
-            set_pg_config(pg_dsn, pg_auto_send, int(pg_interval))
+            set_pg_conn_fields(host, port, db, user, password_input, sslmode="prefer")
+            set_pg_config_compat(pg_auto_send, int(pg_interval))
             st.success("PG beállítások mentve.")
+
+    # Régi (legacy) DSN törlés gomb (ha valaha elmentetted simán a settings-be)
+    legacy_dsn = get_setting("pg_dsn", "")
+    colld1, colld2 = st.columns([1,3])
+    if legacy_dsn:
+        with colld1:
+            if st.button("Régi DSN törlése a settings-ből", key="wipe_legacy_dsn_btn"):
+                set_setting("pg_dsn", "")
+                st.success("Régi DSN törölve a beállításokból.")
+        with colld2:
+            st.caption("Biztonság: a jelszót mostantól a kulcstár kezeli. A teljes DSN-t nem tároljuk/plaintext nem jelenítjük meg.")
 
     stats = get_pg_outbox_stats()
     colpf1, colpf2 = st.columns([1,1])
@@ -851,7 +913,7 @@ def render_settings_page():
         if st.button("Sor kiürítése most (Flush)", key="pg_flush_btn"):
             dsn, _, _ = get_pg_config()
             if not dsn:
-                st.warning("Állíts be DSN-t előbb.")
+                st.warning("Előbb mentsd a PG kapcsolatot (és a jelszót a kulcstárba).")
             else:
                 flush_pg_outbox(dsn, max_items=200)
                 st.success("Flush lefutott.")
@@ -972,7 +1034,7 @@ def render_mappings_page():
     with colC:
         st.subheader("ERP tételek (alapadat.tetel – ceg_id=3)")
         if not dsn:
-            st.warning("Nincs beállítva PostgreSQL DSN a Beállításokban.")
+            st.warning("Nincs beállítva PostgreSQL kapcsolat. Menj a Beállításokhoz és mentsd el (jelszó kulcstárban)!")
             erp_df = pd.DataFrame()
         else:
             ceg_id = st.number_input("ERP ceg_id", min_value=1, value=3, key="erp_ceg_id")
@@ -1076,21 +1138,17 @@ else:
 
 page = st.session_state["page"]
 if page == "Beállítások":
-    render_settings_page()
-    st.stop()
+    render_settings_page(); st.stop()
 elif page == "Törzsadatok & kapcsolások":
-    render_mappings_page()
-    st.stop()
+    render_mappings_page(); st.stop()
 
 # --- Oldalsáv – aktív állat + új tétel ---
 st.sidebar.header("Műveletek")
-
 _anim_df = get_animals(only_active=True)
 _anim_names = _anim_df["name"].tolist() if not _anim_df.empty else []
 if not _anim_names:
     st.sidebar.warning("Nincs aktív állat. Létrehozás: Törzsadatok & kapcsolások → Állatok kezelése")
     st.stop()
-
 allat = st.sidebar.selectbox("Állat", _anim_names, key="sidebar_animal_sel")
 
 st.sidebar.subheader("Új bontási tétel")
@@ -1145,7 +1203,6 @@ st.markdown("---")
 st.header("Részek rögzítése")
 left, right = st.columns([1, 1])
 
-# session állapot
 if "resz_sel" not in st.session_state:
     st.session_state["resz_sel"] = None
 if "tomeg_str" not in st.session_state:
@@ -1153,7 +1210,6 @@ if "tomeg_str" not in st.session_state:
 
 with left:
     st.subheader("Érintő panel – rész és tömeg")
-
     parts = get_all_parts(active_batch["allat"])
     st.write("Válassz részt:")
     filter_txt = st.text_input("Keresés a részek között", key="filter_parts")
@@ -1214,7 +1270,6 @@ with left:
                 st.warning("Adj meg érvényes tömeget.")
             else:
                 save_part(int(active_batch.id), sel, float(val), resz_megj)
-                # Opcionális külső küldések
                 try:
                     _url, _api_key, _secret, _auto = get_vir_config()
                     if _auto and _url:
@@ -1232,11 +1287,10 @@ with left:
                 st.session_state["tomeg_str"] = ""
                 st.rerun()
 
-    # ↩️ Visszavonás (utolsó tétel)
     if st.button("↩️ Visszavonás (utolsó tétel)", use_container_width=True, key="undo_btn", disabled=is_closed):
         df_last = get_parts(int(active_batch.id))
         if not df_last.empty:
-            last_id = int(df_last.iloc[0]["id"])  # DESC szerint
+            last_id = int(df_last.iloc[0]["id"])
             if not delete_part(last_id):
                 st.warning("Lezárt tételből nem törölhetsz.")
             st.session_state["tomeg_str"] = ""
@@ -1268,16 +1322,13 @@ with right:
         file_to_save = None; mime = None; fname = None
         if photo is not None:
             file_to_save = photo.getvalue()
-            mime = getattr(photo, 'type', 'image/jpeg')
-            fname = getattr(photo, 'name', 'camera.jpg')
+            mime = getattr(photo, 'type', 'image/jpeg'); fname = getattr(photo, 'name', 'camera.jpg')
         elif upload is not None:
             file_to_save = upload.getvalue()
-            mime = getattr(upload, 'type', 'application/octet-stream')
-            fname = getattr(upload, 'name', 'file')
+            mime = getattr(upload, 'type', 'application/octet-stream'); fname = getattr(upload, 'name', 'file')
         if file_to_save:
             save_attachment(int(active_batch.id), file_to_save, fname, mime, kind="szallitolevel", note=note_att)
-            st.success("Melléklet mentve.")
-            st.rerun()
+            st.success("Melléklet mentve."); st.rerun()
         else:
             st.warning("Nincs kiválasztott fotó vagy fájl.")
 
@@ -1317,18 +1368,14 @@ kulonbseg = be - osszeg
 hozam = (osszeg / be * 100.0) if be > 0 else 0.0
 
 m1, m2, m3, m4 = st.columns(4)
-with m1:
-    st.metric("Beérkezett (kg)", f"{be:.2f}")
-with m2:
-    st.metric("Rögzített részek (kg)", f"{osszeg:.2f}")
-with m3:
-    st.metric("Hozam (%)", f"{hozam:.1f}%")
-with m4:
-    st.metric("Különbözet (kg)", f"{kulonbseg:.2f}")
+with m1: st.metric("Beérkezett (kg)", f"{be:.2f}")
+with m2: st.metric("Rögzített részek (kg)", f"{osszeg:.2f}")
+with m3: st.metric("Hozam (%)", f"{hozam:.1f}%")
+with m4: st.metric("Különbözet (kg)", f"{kulonbseg:.2f}")
 
-st.progress(max(0, min(100, int(hozam))))  # 0..100
+st.progress(max(0, min(100, int(hozam))))
 
-# Különbözet rögzítése gyorsgomb
+# Különbözet felvétele
 default_parts = get_all_parts(active_batch["allat"])
 try:
     _default_index = default_parts.index("Csont")
