@@ -1,10 +1,31 @@
+# Alapok
 streamlit>=1.36
 pandas>=2.2
 sqlalchemy>=2.0
-# VÁLASZD KI az adatbázisodhoz valót:
-pymysql>=1.1          # MySQL/MariaDB-hez
-psycopg2-binary>=2.9  # PostgreSQL-hez
-# Ha Excelt írsz/olvasol:
+requests>=2.32
+
+# Szebb felső menü
+streamlit-option-menu>=0.3.6
+
+# Adatbázis driverek
+psycopg2-binary>=2.9      # PostgreSQL
+pymysql>=1.1              # (opcionális) MySQL/MariaDB
+
+# Excel támogatás (opcionális)
 openpyxl>=3.1
+
+# PDF export + képek
+reportlab>=4.0
+pillow>=10.3
+
+# (Fejlesztés) automatikus újratöltés watchdoggal
+watchdog>=4.0
+
 # (opcionális) .env használathoz
 python-dotenv>=1.0
+
+# Jelszó biztonságos tárolása (helyi gépen/ szerveren kulcstárban)
+keyring>=25.2
+# Ha nincs rendszer-kulcstár (headless linux), ez egy fájl-alapú backendet ad.
+# Biztonság szempontból gyengébb, csak végső esetben kapcsold be:
+# keyrings.alt>=5.0
