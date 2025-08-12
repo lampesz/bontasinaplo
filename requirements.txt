@@ -1,0 +1,10 @@
+streamlit>=1.36
+pandas>=2.2
+sqlalchemy>=2.0
+# VÁLASZD KI az adatbázisodhoz valót:
+pymysql>=1.1          # MySQL/MariaDB-hez
+psycopg2-binary>=2.9  # PostgreSQL-hez
+# Ha Excelt írsz/olvasol:
+openpyxl>=3.1
+# (opcionális) .env használathoz
+python-dotenv>=1.0
