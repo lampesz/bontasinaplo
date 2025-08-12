@@ -1,12 +1,22 @@
 # streamlit_app.py
 # Bontásinapló – vizuális, érintőbarát MVP
-# Fő újdonság: PostgreSQL jelszó biztonságos kezelése (Keyring/Keychain), felső menü, duplikált gomb-ID-k fix
+# Biztonság: PostgreSQL hozzáférés titkos kezelése – prioritás:
+#   1) st.secrets["pg"]  (Streamlit Cloud / secrets.toml)
+#   2) környezeti változók (PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD)
+#   3) lokális keyring (macOS Keychain / Windows Credential Manager / stb.)
 #
 # Indítás:
-#   pip install streamlit pandas sqlalchemy requests psycopg2-binary
-#   pip install streamlit-option-menu
-#   pip install reportlab            # (PDF export)
-#   pip install keyring              # (jelszó a rendszer kulcstárában)
+#   pip install -r requirements.txt
+#   streamlit run streamlit_app.py
+#
+# Secrets példa (.streamlit/secrets.toml vagy Cloud Secrets):
+# [pg]
+# host = "192.168.1.155"
+# port = 5432
+# db = "cegirnyitas"
+# user = "Test"
+# password = "124578"
+# sslmode = "prefer"   # ha kell
 
 import streamlit as st
 import pandas as pd
@@ -31,7 +41,7 @@ try:
 except Exception:
     HAS_OPT_MENU = False
 
-# Biztonságos jelszó-tárolás (kulcstár)
+# Keyring (lokális gépen – Cloudon nem kötelező)
 try:
     import keyring
     HAS_KEYRING = True
@@ -54,7 +64,7 @@ SEED_ANIMALS = {
     ],
 }
 
-# --- DB ---
+# --- DB (helyi) ---
 engine = create_engine("sqlite:///bontas.db", future=True)
 
 # táblák
@@ -347,34 +357,74 @@ def set_vir_config(url: str, api_key: str, secret: str, auto: bool):
     set_setting("vir_secret", secret or "")
     set_setting("vir_auto_send", "1" if auto else "0")
 
-# --- PG konfiguráció (mezők + kulcstár) ---
+# --- PG DSN építés / titkok kezelése ---
+
 def _pg_key_id(host: str, port: int, db: str, user: str) -> str:
     return f"{user}@{host}:{port}/{db}"
 
+def build_pg_dsn(host: str, port: int, db: str, user: str, password: str = None, sslmode: str = "prefer") -> str:
+    if not (host and db and user):
+        return ""
+    pw = quote_plus(password or "")
+    return f"postgresql+psycopg2://{user}:{pw}@{host}:{int(port)}/{db}"
+
 def get_pg_conn_fields():
-    host = get_setting("pg_host", "")
-    port = int(get_setting("pg_port", "5432") or 5432)
-    db   = get_setting("pg_db", "")
-    user = get_setting("pg_user", "")
-    sslmode = get_setting("pg_sslmode", "prefer")  # optional
+    """Kapcsolati mezők forrása prioritással:
+       1) st.secrets['pg'] (Cloud/prod)
+       2) env (PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD)
+       3) settings + keyring (lokál)
+    """
+    # 1) Secrets
+    if "pg" in st.secrets:
+        s = st.secrets["pg"]
+        return {
+            "host": s.get("host", ""),
+            "port": int(s.get("port", 5432) or 5432),
+            "db":   s.get("db", ""),
+            "user": s.get("user", ""),
+            "sslmode": s.get("sslmode", "prefer"),
+            "password_saved": bool(s.get("password", "")),
+            "password_source": "secrets",
+        }
+
+    # 2) Env
+    host = os.getenv("PGHOST", get_setting("pg_host", ""))
+    port = int(os.getenv("PGPORT", get_setting("pg_port", "5432") or 5432))
+    db   = os.getenv("PGDATABASE", get_setting("pg_db", ""))
+    user = os.getenv("PGUSER", get_setting("pg_user", ""))
+    sslmode = os.getenv("PGSSLMODE", get_setting("pg_sslmode", "prefer"))
+    pw_env = os.getenv("PGPASSWORD") or os.getenv("PG_PASSWORD")
+    if pw_env:
+        return {
+            "host": host, "port": port, "db": db, "user": user,
+            "sslmode": sslmode, "password_saved": True, "password_source": "env",
+            "password_env": True
+        }
+
+    # 3) Settings + (opcionális) keyring
     saved = False
     if HAS_KEYRING and host and db and user:
         try:
-            pw = keyring.get_password("Bontasinaplo", _pg_key_id(host, port, db, user))
-            saved = pw is not None
+            saved = keyring.get_password("Bontasinaplo", _pg_key_id(host, port, db, user)) is not None
         except Exception:
             saved = False
-    return {"host": host, "port": port, "db": db, "user": user, "sslmode": sslmode, "password_saved": saved}
+    return {
+        "host": host, "port": port, "db": db, "user": user,
+        "sslmode": sslmode, "password_saved": saved, "password_source": "settings",
+    }
 
 def set_pg_conn_fields(host: str, port: int, db: str, user: str, password: str = None, sslmode: str = "prefer"):
+    # Cloudon/secrets esetén ne mentsünk semmit – ott a Secrets az igazság
+    if "pg" in st.secrets:
+        st.info("A PG kapcsolatot jelenleg a Streamlit Secrets adja. Itt nem mentek el semmit.")
+        return
     set_setting("pg_host", host or "")
     set_setting("pg_port", str(int(port or 5432)))
     set_setting("pg_db", db or "")
     set_setting("pg_user", user or "")
     set_setting("pg_sslmode", sslmode or "prefer")
-    # NE tárolj régi DSN-t a settings-ben
-    set_setting("pg_dsn", "")
-    # jelszó kulcstárba
+    set_setting("pg_dsn", "")  # régi plain DSN törlése
+    # jelszó csak lokálisan keyringbe
     if password and password.strip():
         if HAS_KEYRING:
             try:
@@ -389,43 +439,36 @@ def clear_pg_saved_password(host: str, port: int, db: str, user: str):
         try:
             keyring.delete_password("Bontasinaplo", _pg_key_id(host, int(port or 5432), db, user))
             st.success("Mentett jelszó törölve a kulcstárból.")
-        except keyring.errors.PasswordDeleteError:
-            st.info("Nem volt elmentett jelszó.")
         except Exception as e:
             st.warning(f"Jelszó törlés hiba: {e}")
 
-def build_pg_dsn(host: str, port: int, db: str, user: str, password: str = None, sslmode: str = "prefer") -> str:
-    if not (host and db and user):
-        return ""
-    pw = quote_plus(password or "")
-    # psycopg2 driverrel
-    dsn = f"postgresql+psycopg2://{user}:{pw}@{host}:{int(port)}/{db}"
-    # sslmode opcionális: SQLAlchemy URL query résszel lehetne, de a legtöbb helyi hálón nem szükséges
-    return dsn
+def set_pg_config_compat(auto_send: bool, interval: int):
+    set_setting("pg_auto_send", "1" if auto_send else "0")
+    set_setting("pg_auto_interval", str(int(interval or 60)))
 
 def get_pg_config():
-    # Elsőként a mező-alapú + kulcstáras DSN-t próbáljuk
+    """Építs DSN-t a prioritás szerint, és add vissza az outbox beállításokat."""
     f = get_pg_conn_fields()
+    # Password forrás
     pw = None
-    if HAS_KEYRING and f["host"] and f["db"] and f["user"]:
+    if f.get("password_source") == "secrets":
+        pw = st.secrets["pg"].get("password")
+    if not pw:
+        pw = os.getenv("PGPASSWORD") or os.getenv("PG_PASSWORD")
+    if not pw and HAS_KEYRING and f["host"] and f["db"] and f["user"]:
         try:
             pw = keyring.get_password("Bontasinaplo", _pg_key_id(f["host"], f["port"], f["db"], f["user"]))
         except Exception:
             pw = None
     dsn = build_pg_dsn(f["host"], f["port"], f["db"], f["user"], pw, f["sslmode"])
-    # Visszafelé kompatibilitás: ha nincs mező-alapú DSN, használjuk a régi pg_dsn értéket (NEM jelenítjük meg)
     if not dsn:
-        dsn = get_setting("pg_dsn", "")
+        dsn = get_setting("pg_dsn", "")  # legacy
     auto_send = get_setting("pg_auto_send", "0") == "1"
     try:
         interval = int(get_setting("pg_auto_interval", "60") or 60)
     except Exception:
         interval = 60
     return dsn, auto_send, interval
-
-def set_pg_config_compat(auto_send: bool, interval: int):
-    set_setting("pg_auto_send", "1" if auto_send else "0")
-    set_setting("pg_auto_interval", str(int(interval or 60)))
 
 def test_pg_connection(dsn: str):
     if not dsn:
@@ -444,14 +487,18 @@ def pg_insert_payload(dsn: str, payload_json: str):
         conn.execute(text("INSERT INTO api.api_bontasi_naplo(adat) VALUES (:adat)"), {"adat": payload_json})
 
 def queue_pg_payload(payload, batch_id: int, event: str, dsn: str = None, auto: bool = True):
+    """Outbox queue. Dedup CSAK a 'batch_closed' eseményre (hogy ne duplázzon lezárást).
+       Inkrementális 'part_created' eseményeket NEM dedupoljuk."""
     payload_json = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False)
     now = datetime.now().isoformat(timespec="seconds")
-    with engine.begin() as conn:
-        exists = conn.execute(text(
-            "SELECT id FROM pg_outbox WHERE batch_id=:b AND event=:e AND status IN ('pending','processing','sent') LIMIT 1"
-        ), {"b": batch_id, "e": event}).fetchone()
-    if exists:
-        return
+    if event == "batch_closed":
+        with engine.begin() as conn:
+            exists = conn.execute(text(
+                "SELECT id FROM pg_outbox WHERE batch_id=:b AND event='batch_closed' "
+                "AND status IN ('pending','processing','sent') LIMIT 1"
+            ), {"b": batch_id}).fetchone()
+        if exists:
+            return
     with engine.begin() as conn:
         conn.execute(text("""
             INSERT INTO pg_outbox(batch_id, event, payload, status, tries, created_at)
@@ -478,8 +525,7 @@ def flush_pg_outbox(dsn: str, max_items: int = 50) -> bool:
                 WHERE status='pending' AND (next_try_at IS NULL OR next_try_at <= :now)
                 ORDER BY id ASC LIMIT :lim
             """), {"now": now_iso, "lim": max_items}).fetchall()
-        if not rows:
-            return True
+        if not rows: return True
         for r in rows:
             rid = int(r[0]); payload_json = r[1]; tries = int(r[2] or 0)
             with engine.begin() as conn:
@@ -507,8 +553,8 @@ def flush_pg_outbox(dsn: str, max_items: int = 50) -> bool:
 def get_pg_outbox_stats():
     try:
         df = pd.read_sql("SELECT status, COUNT(*) cnt FROM pg_outbox GROUP BY status", engine)
-        mapping = {row["status"]: int(row["cnt"]) for _, row in df.iterrows()}
-        return {"pending": mapping.get("pending", 0), "processing": mapping.get("processing", 0), "sent": mapping.get("sent", 0)}
+        m = {row["status"]: int(row["cnt"]) for _, row in df.iterrows()}
+        return {"pending": m.get("pending", 0), "processing": m.get("processing", 0), "sent": m.get("sent", 0)}
     except Exception:
         return {"pending": 0, "processing": 0, "sent": 0}
 
@@ -853,12 +899,16 @@ def render_settings_page():
 
     st.markdown("---")
 
-    # PostgreSQL – MEZŐK + KULCSTÁR
+    # PostgreSQL – Secrets/Env/Keyring
     st.subheader("PostgreSQL integráció (JSON → api.api_bontasi_naplo)")
-    if not HAS_KEYRING:
-        st.warning("A jelszó biztonságos tárolásához telepítsd a keyring csomagot: `pip install keyring`")
-
     f = get_pg_conn_fields()
+    if f.get("password_source") == "secrets":
+        st.info("A PG kapcsolat **Streamlit Secrets**-ből jön (ajánlott Cloudon). A mezők csak teszthez/infóhoz vannak.")
+    elif os.getenv("PGPASSWORD") or os.getenv("PG_PASSWORD"):
+        st.info("A PG jelszó **környezeti változóból** jön.")
+    elif HAS_KEYRING:
+        st.caption("Lokális gépen a jelszó a kulcstárban lehet elmentve (Keychain/Keyring).")
+
     c1, c2, c3, c4 = st.columns([1,1,1,1])
     with c1:
         host = st.text_input("Host", value=f["host"], key="pg_host")
@@ -869,20 +919,33 @@ def render_settings_page():
     with c4:
         user = st.text_input("Felhasználó", value=f["user"], key="pg_user")
 
-    pw_placeholder = "(mentve a kulcstárban)" if f["password_saved"] else ""
+    # Placeholder a forrástól függően
+    if f.get("password_source") == "secrets":
+        pw_placeholder = "(jelszó: Streamlit Secrets)"
+    elif os.getenv("PGPASSWORD") or os.getenv("PG_PASSWORD"):
+        pw_placeholder = "(jelszó: környezeti változó)"
+    else:
+        pw_placeholder = "(mentve a kulcstárban)" if f["password_saved"] else ""
+
     password_input = st.text_input("Jelszó", type="password", value="", placeholder=pw_placeholder, key="pg_password")
 
     colpg1, colpg2, colpg3, colpg4 = st.columns([1,1,1,1])
     with colpg1:
         if st.button("Kapcsolat teszt (PG)", key="pg_test_btn"):
-            test_pw = password_input.strip() if password_input else None
-            # ha nincs friss jelszó, olvassuk a kulcstárból
-            if not test_pw and HAS_KEYRING and host and db and user:
+            # build DSN a fenti prioritással
+            pw = None
+            if f.get("password_source") == "secrets":
+                pw = st.secrets["pg"].get("password")
+            if not pw:
+                pw = password_input.strip() if password_input else None
+            if not pw:
+                pw = os.getenv("PGPASSWORD") or os.getenv("PG_PASSWORD")
+            if not pw and HAS_KEYRING and host and db and user:
                 try:
-                    test_pw = keyring.get_password("Bontasinaplo", _pg_key_id(host, int(port or 5432), db, user))
+                    pw = keyring.get_password("Bontasinaplo", _pg_key_id(host, int(port or 5432), db, user))
                 except Exception:
-                    test_pw = None
-            dsn_try = build_pg_dsn(host, port, db, user, test_pw)
+                    pw = None
+            dsn_try = build_pg_dsn(host, port, db, user, pw)
             ok, msg = test_pg_connection(dsn_try)
             if ok: st.success("PG kapcsolat OK")
             else:  st.error(msg)
@@ -896,7 +959,7 @@ def render_settings_page():
             set_pg_config_compat(pg_auto_send, int(pg_interval))
             st.success("PG beállítások mentve.")
 
-    # Régi (legacy) DSN törlés gomb (ha valaha elmentetted simán a settings-be)
+    # Régi (legacy) DSN törlés gomb – ha korábban elmentve
     legacy_dsn = get_setting("pg_dsn", "")
     colld1, colld2 = st.columns([1,3])
     if legacy_dsn:
@@ -905,7 +968,7 @@ def render_settings_page():
                 set_setting("pg_dsn", "")
                 st.success("Régi DSN törölve a beállításokból.")
         with colld2:
-            st.caption("Biztonság: a jelszót mostantól a kulcstár kezeli. A teljes DSN-t nem tároljuk/plaintext nem jelenítjük meg.")
+            st.caption("Biztonság: a jelszót mostantól Secrets/env/keyring kezeli. A teljes DSN-t nem tároljuk/plaintext nem jelenítjük meg.")
 
     stats = get_pg_outbox_stats()
     colpf1, colpf2 = st.columns([1,1])
@@ -913,7 +976,7 @@ def render_settings_page():
         if st.button("Sor kiürítése most (Flush)", key="pg_flush_btn"):
             dsn, _, _ = get_pg_config()
             if not dsn:
-                st.warning("Előbb mentsd a PG kapcsolatot (és a jelszót a kulcstárba).")
+                st.warning("Előbb mentsd a PG kapcsolatot (vagy állítsd be a Secrets-et).")
             else:
                 flush_pg_outbox(dsn, max_items=200)
                 st.success("Flush lefutott.")
@@ -950,8 +1013,7 @@ def render_mappings_page():
                 if tmpl and tmpl != "(nincs)":
                     try: copy_parts_from_animal(tmpl, new_an)
                     except Exception: pass
-                st.success("Állat létrehozva.")
-                st.rerun()
+                st.success("Állat létrehozva."); st.rerun()
             else:
                 st.error(msg)
     with colA2:
@@ -961,19 +1023,15 @@ def render_mappings_page():
             prop = st.checkbox("Régi tételekben is frissítse a nevet", key="animal_rename_propagate")
             if st.button("✏️ Átnevezés", key="animal_rename_btn"):
                 ok, msg = rename_animal(old, newn, propagate_batches=prop)
-                if ok:
-                    st.success("Átnevezve.")
-                    st.rerun()
-                else:
-                    st.error(msg)
+                if ok: st.success("Átnevezve."); st.rerun()
+                else: st.error(msg)
     with colA3:
         if not df_anim.empty:
             tgt = st.selectbox("Aktiválás/Deaktiválás", df_anim["name"].tolist(), key="animal_toggle_sel")
             act_state = int(df_anim[df_anim["name"]==tgt].iloc[0]["active"]) if not df_anim.empty else 1
             if st.button("🔁 Állapot váltása", key="animal_toggle_btn"):
                 set_animal_active(tgt, not bool(act_state))
-                st.success("Státusz frissítve.")
-                st.rerun()
+                st.success("Státusz frissítve."); st.rerun()
 
     st.markdown("---")
 
@@ -1002,11 +1060,8 @@ def render_mappings_page():
         new_part = st.text_input("Új rész neve", key="part_new_name")
         if st.button("➕ Rész hozzáadása", key="part_add_btn"):
             ok, msg = add_custom_part(animal_sel, new_part)
-            if ok:
-                st.success("Hozzáadva.")
-                st.rerun()
-            else:
-                st.error(msg)
+            if ok: st.success("Hozzáadva."); st.rerun()
+            else: st.error(msg)
 
         custom_df = get_custom_parts(animal_sel, only_active=True)
         if not custom_df.empty:
@@ -1017,24 +1072,18 @@ def render_mappings_page():
             with c1:
                 if st.button("✏️ Átnevezés", key="part_rename_btn"):
                     ok, msg = rename_custom_part(animal_sel, old, new_nm)
-                    if ok:
-                        st.success("Átnevezve.")
-                        st.rerun()
-                    else:
-                        st.error(msg)
+                    if ok: st.success("Átnevezve."); st.rerun()
+                    else: st.error(msg)
             with c2:
                 if st.button("🗑️ Deaktiválás", key="part_deactivate_btn"):
                     ok, msg = deactivate_custom_part(animal_sel, old)
-                    if ok:
-                        st.success("Deaktiválva.")
-                        st.rerun()
-                    else:
-                        st.error(msg)
+                    if ok: st.success("Deaktiválva."); st.rerun()
+                    else: st.error(msg)
 
     with colC:
         st.subheader("ERP tételek (alapadat.tetel – ceg_id=3)")
         if not dsn:
-            st.warning("Nincs beállítva PostgreSQL kapcsolat. Menj a Beállításokhoz és mentsd el (jelszó kulcstárban)!")
+            st.warning("Nincs beállítva PostgreSQL kapcsolat. Menj a Beállításokhoz és mentsd el (vagy adj meg Secrets-et)!")
             erp_df = pd.DataFrame()
         else:
             ceg_id = st.number_input("ERP ceg_id", min_value=1, value=3, key="erp_ceg_id")
@@ -1098,8 +1147,7 @@ def render_mappings_page():
                                     key=f"del_map_part_{animal_sel}")
             if st.button("❌ Kapcsolás törlése", key=f"delete_mapping_btn_{animal_sel}"):
                 delete_mapping(animal_sel, del_part)
-                st.success("Kapcsolás törölve.")
-                st.rerun()
+                st.success("Kapcsolás törölve."); st.rerun()
 
 # --- Felső menü + oldalválasztás ---
 st.title("🥩 Bontásinapló – vizuális MVP")
@@ -1270,6 +1318,7 @@ with left:
                 st.warning("Adj meg érvényes tömeget.")
             else:
                 save_part(int(active_batch.id), sel, float(val), resz_megj)
+                # Opcionális külső küldések
                 try:
                     _url, _api_key, _secret, _auto = get_vir_config()
                     if _auto and _url:
