@@ -1870,25 +1870,25 @@ with right:
     if st.button("📂 Csatolmányok megnyitása", key="open_attachments_page_btn"):
         st.session_state["page"] = "Csatolmányok"
         st.rerun()
-
-st.subheader("Rögzített részek – összesítés")
+#
+#st.subheader("Rögzített részek – összesítés")
 parts_df = get_parts(int(active_batch.id))
 summary_df = pd.DataFrame(columns=["resz","tomeg"])
 if not parts_df.empty:
     summary_df = parts_df.groupby("resz", as_index=False)["tomeg"].sum().sort_values("tomeg", ascending=False)
-st.dataframe(
-    summary_df.rename(columns={"resz":"Rész","tomeg":"Tömeg (kg)"}),
-    use_container_width=True,
-    height=240
-)
+#st.dataframe(
+    #summary_df.rename(columns={"resz":"Rész","tomeg":"Tömeg (kg)"}),
+    #use_container_width=True,
+    #height=240
+#)
 
-st.subheader("Rögzített részek – részletek")
+#st.subheader("Rögzített részek – részletek")
 if parts_df.empty:
     st.info("Még nincs rögzített rész ehhez a tételhez.")
 else:
-    show = parts_df[["id","created_at","resz","tomeg","megjegyzes"]].copy()
-    show = show.rename(columns={"id":"ID","created_at":"Időpont","resz":"Rész","tomeg":"Tömeg (kg)","megjegyzes":"Megjegyzés"})
-    st.dataframe(show, use_container_width=True, height=300)
+    # show = parts_df[["id","created_at","resz","tomeg","megjegyzes"]].copy()
+    #  show = show.rename(columns={"id":"ID","created_at":"Időpont","resz":"Rész","tomeg":"Tömeg (kg)","megjegyzes":"Megjegyzés"})
+    #  st.dataframe(show, use_container_width=True, height=300)
     st.markdown("**Törlés (nyitott tételnél):**")
     for _, row in parts_df.iterrows():
         c1, c2, c3, c4, c5 = st.columns([2,2,2,3,2])
