@@ -1,0 +1,440 @@
+<!doctype html>
+<html lang="hu">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Bontásinapló – Használati útmutató</title>
+<style>
+@media print {
+  @page { size: A4; margin: 16mm; }
+  a[href]:after { content: ""; } /* hide link urls */
+}
+
+:root{
+  --fg: #0f172a;
+  --muted: #475569;
+  --accent: #2563eb;
+  --accent-2: #0ea5e9;
+  --bg: #ffffff;
+  --code-bg: #0b1020;
+  --code-fg: #f8fafc;
+}
+
+* { box-sizing: border-box; }
+html, body { padding:0; margin:0; background: var(--bg); color: var(--fg); }
+.container { max-width: 920px; margin: 0 auto; padding: 28px; }
+
+.cover {
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  color: white;
+  padding: 64px 28px;
+  border-bottom: 6px solid rgba(0,0,0,0.06);
+}
+.cover .inner { max-width: 920px; margin: 0 auto; }
+.cover h1 { margin: 0 0 10px 0; font-size: 42px; letter-spacing: .3px; }
+.cover .meta { opacity: .95; font-size: 16px; }
+
+.toc-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 18px 20px;
+  margin: 20px 0 28px 0;
+}
+.toc-card h2 { margin: 0 0 8px 0; font-size: 18px; color: var(--muted); }
+.toc-list { list-style: none; padding-left: 0; margin: 0; }
+.toc-list li { margin: 4px 0; }
+.toc-list li.lvl1 { font-weight: 700; margin-top: 8px; }
+.toc-list li.lvl2 { margin-left: 16px; }
+.toc-list li.lvl3 { margin-left: 32px; }
+.toc-list a { color: var(--accent); text-decoration: none; }
+.toc-list a:hover { text-decoration: underline; }
+
+h1{ font-size: 28px; margin: 28px 0 10px; }
+h2{ font-size: 22px; margin: 24px 0 8px; padding-bottom: 6px; border-bottom: 2px solid #e5e7eb; }
+h3{ font-size: 18px; margin: 18px 0 6px; color: var(--muted); }
+
+p { margin: 12px 0; }
+ul, ol { margin: 8px 0 12px 24px; }
+li { margin: 4px 0; }
+
+hr { border: none; border-top: 1px dashed #cbd5e1; margin: 24px 0; }
+
+blockquote {
+  margin: 10px 0; padding: 10px 14px;
+  background:#f1f5f9; color:#0f172a;
+  border-left: 4px solid var(--accent);
+  border-radius: 8px;
+}
+
+pre { background: var(--code-bg); color: var(--code-fg); padding: 12px 14px; border-radius: 10px; overflow:auto; }
+code { background: rgba(2,6,23,.06); padding: 2px 6px; border-radius: 6px; }
+
+.badge {
+  display: inline-block; background: #eef2ff; color: #3730a3;
+  padding: 2px 8px; border-radius: 999px; font-size: 12px; margin-left: 8px;
+}
+
+.footer-note {
+  margin-top: 40px; font-size: 12px; color: var(--muted);
+}
+</style>
+</head>
+<body>
+  <div class="cover">
+    <div class="inner">
+      <h1>Bontásinapló – Használati útmutató</h1>
+      <div class="meta">Verzió: 2025.08.13. <span class="badge">Nyomtatható</span></div>
+    </div>
+  </div>
+
+  <div class="container">
+    <div class="toc-card">
+      <h2>Tartalomjegyzék</h2>
+      <ul class='toc-list'>
+<li class="lvl1"><a href="#bontasinaplo-hasznalati-utmutato">Bontásinapló – Használati útmutató</a></li>
+<li class="lvl2"><a href="#1-attekintes">1) Áttekintés</a></li>
+<li class="lvl2"><a href="#2-telepites-inditas">2) Telepítés &amp; indítás</a></li>
+<li class="lvl3"><a href="#2-1-elofeltetelek">2.1. Előfeltételek</a></li>
+<li class="lvl3"><a href="#2-2-fuggosegek-telepitese">2.2. Függőségek telepítése</a></li>
+<li class="lvl3"><a href="#2-3-inditas">2.3. Indítás</a></li>
+<li class="lvl2"><a href="#3-gyors-kezdes-napi-hasznalat">3) Gyors kezdés (napi használat)</a></li>
+<li class="lvl3"><a href="#3-1-uj-tetel-rogzitese-rogzites-menu">3.1. Új tétel rögzítése (Rögzítés menü)</a></li>
+<li class="lvl3"><a href="#3-2-reszek-rogzitese">3.2. Részek rögzítése</a></li>
+<li class="lvl3"><a href="#3-3-tetel-lezarasa">3.3. Tétel lezárása</a></li>
+<li class="lvl2"><a href="#4-csatolmanyok-kulon-menu">4) Csatolmányok (külön menü)</a></li>
+<li class="lvl2"><a href="#5-torzsadatok-kapcsolasok-erp">5) Törzsadatok &amp; kapcsolások (ERP)</a></li>
+<li class="lvl2"><a href="#6-beallitasok">6) Beállítások</a></li>
+<li class="lvl3"><a href="#6-1-vir-kulso-json-endpoint">6.1. VIR (külső JSON endpoint)</a></li>
+<li class="lvl3"><a href="#6-2-postgresql-json-api-api-bontasi-naplo">6.2. PostgreSQL (JSON → `api.api_bontasi_naplo`)</a></li>
+<li class="lvl3"><a href="#6-3-merleg-rs232-usb">6.3. Mérleg (RS232/USB)</a></li>
+<li class="lvl3"><a href="#6-4-csatolmany-tarhely">6.4. Csatolmány tárhely</a></li>
+<li class="lvl2"><a href="#7-exportok">7) Exportok</a></li>
+<li class="lvl2"><a href="#8-adatszerkezet-lokalis">8) Adatszerkezet (lokális)</a></li>
+<li class="lvl2"><a href="#9-tipikus-hibak-es-elharitas">9) Tipikus hibák és elhárítás</a></li>
+<li class="lvl3"><a href="#9-1-merleg-nem-olvashato">9.1. Mérleg nem olvasható</a></li>
+<li class="lvl3"><a href="#9-2-too-many-postgresql-connections">9.2. „Too many PostgreSQL connections”</a></li>
+<li class="lvl3"><a href="#9-3-dupla-adatok-a-pg-ben">9.3. Dupla adatok a PG-ben</a></li>
+<li class="lvl3"><a href="#9-4-attributeerror-streamlit-experimental-rerun">9.4. „AttributeError: streamlit.experimental_rerun”</a></li>
+<li class="lvl2"><a href="#10-legjobb-gyakorlatok">10) Legjobb gyakorlatok</a></li>
+<li class="lvl2"><a href="#11-integracios-reszletek">11) Integrációs részletek</a></li>
+<li class="lvl3"><a href="#11-1-vir-http-kuldes">11.1. VIR HTTP-küldés</a></li>
+<li class="lvl3"><a href="#11-2-pg-outbox-api-api-bontasi-naplo">11.2. PG outbox → `api.api_bontasi_naplo`</a></li>
+<li class="lvl2"><a href="#12-karbantartas-uzemeltetes">12) Karbantartás / üzemeltetés</a></li>
+</ul>
+    </div>
+
+    <h1 id="bontasinaplo-hasznalati-utmutato">Bontásinapló – Használati útmutató</h1>
+
+<p><strong>Verzió:</strong> 2025.08.13.</p>
+
+<h2 id="1-attekintes">1) Áttekintés</h2>
+<p>A Bontásinapló egy <strong>érintőbarát</strong> Streamlit-alapú alkalmazás, amelyben rögzíthető:</p>
+<ul>
+<li>a beérkezett tétel (állat, lot/tétel adatok, össztömeg),</li>
+<li>a bontási <strong>részek</strong> és azok <strong>tömege</strong> (akár mérlegről, RS232/USB-n),</li>
+<li><strong>hozam</strong> és <strong>különbözet</strong> automatikus számítása,</li>
+<li><strong>mellékletek</strong> (szállítólevél-fotó stb.) kezelése (tömörítve, bélyegképpel),</li>
+<li><strong>VIR</strong> JSON-küldés (HMAC aláírva – opcionális),</li>
+<li><strong>PostgreSQL</strong> felé JSON beküldés <strong>outbox</strong> sorral és automatikus újrapróbálkozással,</li>
+<li><strong>ERP-kapcsolás</strong>: állat-részek összekötése az ERP cikkekkel (PG-ből töltve),</li>
+<li><strong>PDF</strong> és <strong>CSV</strong> export.</li>
+</ul>
+
+<p>Felület menüpontjai felül:</p>
+<ul>
+<li><strong>Rögzítés</strong> – napi munka: tételek, részek, hozam, lezárás.</li>
+<li><strong>Csatolmányok</strong> – külön tárhelyre mentett képek/fájlok kezelése.</li>
+<li><strong>Törzsadatok &amp; kapcsolások</strong> – állatok és részek karbantartása, ERP-kapcsolás.</li>
+<li><strong>Beállítások</strong> – PG, VIR, mérleg (RS232), csatolmány-tárhely, outbox/pool admin.</li>
+</ul>
+
+<hr/>
+
+<h2 id="2-telepites-inditas">2) Telepítés &amp; indítás</h2>
+
+<h3 id="2-1-elofeltetelek">2.1. Előfeltételek</h3>
+<ul>
+<li>Python <strong>3.9+</strong> (ajánlott 3.10–3.12)</li>
+<li>Helyi gépen kamera (opcionális – fotózáshoz) és USB–RS232 adapter a mérleghez</li>
+</ul>
+
+<h3 id="2-2-fuggosegek-telepitese">2.2. Függőségek telepítése</h3>
+<p>1) (Ajánlott) virtuális környezet:</p>
+<pre><code>
+python -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+</code></pre>
+<p>2) Csomagok:</p>
+<pre><code>
+pip install -r requirements.txt
+</code></pre>
+<p>Ha mérleget használsz: a <code>pyserial</code> is kell (a <code>requirements.txt</code>-ben benne van).</p>
+
+<h3 id="2-3-inditas">2.3. Indítás</h3>
+<pre><code>
+streamlit run streamlit_app.py
+</code></pre>
+<p>A böngészőben megnyíló címen (pl. <code>http://localhost:8501</code>) eléred az appot.</p>
+
+<blockquote>**Megjegyzés:** macOS-en és Linuxon az RS232-hez a port-hozzáféréshez engedély kellhet (USB-soros driver, csoporttagság `dialout` stb.). Windows-on a COM portot (pl. COM3) fogod látni.</blockquote>
+
+<hr/>
+
+<h2 id="3-gyors-kezdes-napi-hasznalat">3) Gyors kezdés (napi használat)</h2>
+
+<h3 id="3-1-uj-tetel-rogzitese-rogzites-menu">3.1. Új tétel rögzítése (Rögzítés menü)</h3>
+<p>1. Felső menüsorban lépj a <strong>Rögzítés</strong> fülre.</p>
+<p>2. Bal oldali <strong>Műveletek</strong> sávban válaszd ki az <strong>Állatot</strong> (pl. Sertés).</p>
+<p>3. <strong>Új bontási tétel</strong> űrlap:</p>
+<p>- <strong>Dátum</strong></p>
+<p>- <strong>Tétel/Lot azonosító</strong></p>
+<p>- <strong>Beszállító</strong>, <strong>Eredet/ENAR</strong>, <strong>Ellenőrizte</strong></p>
+<p>- <strong>Beérkezett össztömeg (kg)</strong></p>
+<p>- kézzel beírható, vagy</p>
+<p>- <strong>⚖️ Mérleg beolvasása</strong> gombbal RS232/USB mérlegről.</p>
+<p>- <strong>Megjegyzés</strong></p>
+<p>4. <strong>Tétel mentése</strong> → a tételek táblázatában megjelenik.</p>
+
+<blockquote>A mérleg gomb működéséhez a **Beállítások → Mérleg** részen előzetesen állítsd be a portot és paramétereket.</blockquote>
+
+<h3 id="3-2-reszek-rogzitese">3.2. Részek rögzítése</h3>
+<p>1. A tételek táblájából válaszd ki az aktív tétel <strong>ID-jét</strong>.</p>
+<p>2. <strong>Érintő panel</strong>:</p>
+<p>- fent választhatsz <strong>Részt</strong> (pl. Comb). Szűrőmező is van.</p>
+<p>- <strong>Tömeg (kg)</strong> megadás:</p>
+<p>- <strong>számbillentyűzettel</strong>, vagy</p>
+<p>- <strong>⚖️ Mérleg beolvasása</strong> gombbal.</p>
+<p>- opcionális <strong>Megjegyzés</strong>.</p>
+<p>- <strong>➕ Hozzáadás</strong> → a rész bekerül.</p>
+<p>3. <strong>Rögzített részek</strong>:</p>
+<p>- <strong>Összesítés</strong>: részenkénti össztömeg.</p>
+<p>- <strong>Részletek</strong>: időbélyeggel listázva, soronként <strong>🗑️</strong> törlés (csak <strong>nyitott</strong> tételnél).</p>
+<p>4. <strong>Hozam és egyenleg</strong>:</p>
+<p>- Beérkezett (kg), Rögzített részek (kg), Hozam % = (sum részek / beérkezett)*100, Különbözet (kg).</p>
+<p>- <strong>➕ Különbözet felvétele</strong>: a maradékot egy kiválasztott részhez (pl. „Csont”) automatikusan rögzíti.</p>
+
+<h3 id="3-3-tetel-lezarasa">3.3. Tétel lezárása</h3>
+<ul>
+<li><strong>Tétel lezárása és teljes adathalmaz küldése</strong>:</li>
+</ul>
+<p>- jelöld be: „Megerősítem…”</p>
+<p>- <strong>🔒 Bontás kész / Lezárás</strong></p>
+<ul>
+<li>Lezárás után:</li>
+</ul>
+<p>- a tétel <strong>nem módosítható</strong>, részt/ csatolmányt törölni nem lehet,</p>
+<p>- a <strong>PostgreSQL outbox</strong> sorba bekerül a <strong>teljes csomag</strong> (<code>batch_closed</code>), amit a háttérküldő továbbít.</p>
+
+<blockquote>Ugyanazon tétel **batch_closed** eseményét a rendszer **deduplikálja** (nem küldi kétszer).</blockquote>
+
+<hr/>
+
+<h2 id="4-csatolmanyok-kulon-menu">4) Csatolmányok (külön menü)</h2>
+<ul>
+<li>Válaszd ki felül a <strong>Csatolmányok</strong> menüt.</li>
+<li>Tétel kiválasztása után:</li>
+</ul>
+<p>- előnézet (bélyegképek) + lista (ID, MIME, megjegyzés, útvonal),</p>
+<p>- <strong>📎 Melléklet mentése</strong>: kamera (<strong>Fotó készítése</strong>) vagy <strong>Feltöltés</strong> (JPG/PNG/PDF),</p>
+<p>- képek <strong>tömörítve</strong> tárolódnak (JPEG, állítható minőség/méret), és <strong>thumbnail</strong> is készül,</p>
+<p>- <strong>🗑️ törlés</strong> csak <strong>nyitott</strong> tételnél engedélyezett.</p>
+
+<p><strong>Tárhely</strong> és <strong>tömörítés</strong> paraméterei a <strong>Beállítások → Csatolmányok tárhely</strong> oldalon állíthatók:</p>
+<ul>
+<li>alap könyvtár (pl. hálózati megosztás),</li>
+<li>dátumos almappák (YYYY/MM/<code>&lt;batch_id&gt;</code>),</li>
+<li>max. képméret (px), JPEG minőség.</li>
+</ul>
+
+<hr/>
+
+<h2 id="5-torzsadatok-kapcsolasok-erp">5) Törzsadatok &amp; kapcsolások (ERP)</h2>
+<p>Itt hozhatsz létre/szerkeszthetsz:</p>
+<ul>
+<li><strong>Állatokat</strong> (pl. Sertés, Marha, új: Macska) – aktiválás/inaktiválás, átnevezés,</li>
+<li><strong>Részeket</strong> állatonként – felvétel, átnevezés, deaktiválás,</li>
+<li><strong>ERP-kapcsolást</strong>:</li>
+</ul>
+<p>1. Állat kiválasztása → saját részek listája,</p>
+<p>2. <strong>ERP cikkek betöltése</strong> a PostgreSQL-ből (lekérdezés: <code>SELECT * FROM alapadat.tetel WHERE ceg_id = 3</code>),</p>
+<p>3. oszlopok (ID/név/kód) automatikus felismerése után <strong>kapcsold össze</strong> a részeket ERP-cikkekkel.</p>
+
+<blockquote>Ha egy részhez van ERP-kapcsolás, a küldött JSON-ban megjelenik **`tetel_id`/`erp_id`** (és opcionálisan ERP kód/név).</blockquote>
+
+<hr/>
+
+<h2 id="6-beallitasok">6) Beállítások</h2>
+
+<h3 id="6-1-vir-kulso-json-endpoint">6.1. VIR (külső JSON endpoint)</h3>
+<ul>
+<li><strong>VIR endpoint URL</strong>: a cél API címe</li>
+<li><strong>API kulcs</strong> (opcionális): <code>X-API-Key</code> fejlécben</li>
+<li><strong>Aláíró titok</strong> (opcionális): <strong>HMAC-SHA256</strong> – <code>X-Signature</code> fejlécben a JSON törzs hash-e</li>
+<li><strong>Auto-küldés mentéskor</strong>: ha be van kapcsolva, <strong>rész hozzáadásakor</strong> is megy <code>part_created</code> esemény</li>
+</ul>
+
+<p><strong>Események:</strong></p>
+<ul>
+<li><code>part_created</code> (inkrementális – egy rész)</li>
+<li><code>batch_closed</code> (lezáráskor a teljes csomag)</li>
+</ul>
+
+<h3 id="6-2-postgresql-json-api-api-bontasi-naplo">6.2. PostgreSQL (JSON → `api.api_bontasi_naplo`)</h3>
+<ul>
+<li>A kapcsolat adatai <strong>Streamlit Secrets</strong>-ből vagy <strong>környezeti változóból</strong> is jöhetnek (a jelszót nem mutatjuk a felületen).</li>
+<li>Auto-küldés (PG): ha be van kapcsolva, <strong>rész mentéskor</strong> is sorba állítható (javasolt inkább záráskor küldeni a teljes csomagot).</li>
+<li><strong>Sor kiürítése most (Flush)</strong> – kézi küldés indítás.</li>
+<li><strong>Statisztika</strong> – hány üzenet vár, folyamatban, elküldve.</li>
+<li><strong>Admin / pool státusz</strong> – kapcsolat medence (pool) állapota, <strong>Ping</strong>, <strong>pool zárása/újranyitása</strong> gombok.</li>
+</ul>
+
+<p><strong>Outbox működés:</strong></p>
+<ul>
+<li>Ha a PG <strong>nem elérhető</strong>, az üzenetek <strong>pending</strong> állapotban maradnak; a háttérszál <strong>exponenciális visszavárakozással</strong> újrapróbálkozik.</li>
+<li>A <code>batch_closed</code> esemény <strong>deduplikált</strong> – ugyanarra a tételre nem kerül két ugyanolyan záró üzenet sorba.</li>
+</ul>
+
+<h3 id="6-3-merleg-rs232-usb">6.3. Mérleg (RS232/USB)</h3>
+<ul>
+<li><strong>Port</strong> kiválasztása listából vagy kézi megadás:</li>
+</ul>
+<p>- Windows: <code>COM3</code> stb.</p>
+<p>- macOS: <code>/dev/cu.usbserial-...</code> vagy <code>/dev/tty.usbserial-...</code></p>
+<p>- Linux: <code>/dev/ttyUSB0</code>, <code>/dev/ttyACM0</code>, stb.</p>
+<ul>
+<li>Paraméterek: <strong>baud</strong>, <strong>adatbit</strong>, <strong>paritás</strong>, <strong>stopbit</strong>, <strong>timeout</strong></li>
+<li><strong>Kimeneti mértékegység</strong>: kg/g/lb/t (belső konverzió)</li>
+<li><strong>⚖️ Teszt beolvasás</strong> gomb – nyers sorok megjeleníthetők hibakereséshez.</li>
+</ul>
+
+<h3 id="6-4-csatolmany-tarhely">6.4. Csatolmány tárhely</h3>
+<ul>
+<li>Alap könyvtár (pl. <code>\\NAS\megosztas\bontas</code>),</li>
+<li>Dátumos almappák,</li>
+<li>Képméret és JPEG minőség.</li>
+</ul>
+
+<hr/>
+
+<h2 id="7-exportok">7) Exportok</h2>
+<ul>
+<li><strong>CSV</strong>:</li>
+</ul>
+<p>- teljes tételek lista,</p>
+<p>- aktív tétel részei.</p>
+<ul>
+<li><strong>PDF jelentés</strong> (tétel szintű): fejlécadatok, rögzített részek, hozam/eltérés, első kép beillesztve (ha van).</li>
+</ul>
+
+<hr/>
+
+<h2 id="8-adatszerkezet-lokalis">8) Adatszerkezet (lokális)</h2>
+<p>A program helyben egy <strong>SQLite</strong> adatbázist használ (<code>bontas.db</code>):</p>
+<ul>
+<li><code>batches</code>: tételfej (állat, dátum, lot, beszállító, beérkezett tömeg, státusz, zárás ideje)</li>
+<li><code>parts</code>: részek (tételhez, név, tömeg, megjegyzés, létrehozási idő)</li>
+<li><code>attachments</code>: csatolmányok (útvonal, MIME, thumbnail útvonal)</li>
+<li><code>settings</code>: beállítások (kulcs–érték)</li>
+<li><code>pg_outbox</code>: PG-be küldendő üzenetek sora (payload, állapot, próbálkozások)</li>
+<li><code>sync_log</code>: küldési napló (VIR/PG)</li>
+<li><code>animals</code>, <code>custom_parts</code>: állatok és hozzájuk tartozó részek</li>
+<li><code>part_mappings</code>: ERP-kapcsolások (állat + rész → ERP id/név/kód)</li>
+</ul>
+
+<p><strong>Mentés:</strong> rendszeresen készíts biztonsági mentést a <code>bontas.db</code>-ről és a csatolmány-könyvtárról (alapértelmezés: <code>docs/</code> vagy a megadott tárhely).</p>
+
+<hr/>
+
+<h2 id="9-tipikus-hibak-es-elharitas">9) Tipikus hibák és elhárítás</h2>
+
+<h3 id="9-1-merleg-nem-olvashato">9.1. Mérleg nem olvasható</h3>
+<ul>
+<li>Telepítve van a <code>pyserial</code>? → <code>pip install pyserial</code></li>
+<li>A port helyes? (Windows: <code>COMx</code>, macOS: <code>/dev/cu.usbserial-...</code>)</li>
+<li>Jogosultság:</li>
+</ul>
+<p>- macOS: a Terminal/IDE kapjon USB hozzáférést; próbáld ki adminnal.</p>
+<p>- Linux: felhasználó a <code>dialout</code> csoportban (<code>sudo usermod -a -G dialout $USER</code> + kijelentkezés).</p>
+<ul>
+<li>A mérleg küld-e folyamatosan sort? Nyomj gombot a mérlegen („Print”, „Send”), ha kell.</li>
+</ul>
+
+<h3 id="9-2-too-many-postgresql-connections">9.2. „Too many PostgreSQL connections”</h3>
+<ul>
+<li>Nézd meg a <strong>Beállítások → Admin / pool</strong> részt (pool méret, checked-out).</li>
+<li>Zárd le a fölös poolokat: <strong>Összes pool lezárása</strong>.</li>
+<li>Ügyelj rá, hogy <strong>ne fusson párhuzamosan sok példány</strong> ugyanazon DSN-nel.</li>
+</ul>
+
+<h3 id="9-3-dupla-adatok-a-pg-ben">9.3. Dupla adatok a PG-ben</h3>
+<ul>
+<li>A <code>batch_closed</code> deduplikált.</li>
+<li>Ha az <strong>ERP oldalon</strong> is kell deduplikáció: szerveroldali <code>md5(adat)</code> egyedi index (üzemeltetésnél).</li>
+</ul>
+
+<h3 id="9-4-attributeerror-streamlit-experimental-rerun">9.4. „AttributeError: streamlit.experimental_rerun”</h3>
+<ul>
+<li>Új Streamlit verziókban használd a <code>st.rerun()</code>-t.</li>
+</ul>
+
+<hr/>
+
+<h2 id="10-legjobb-gyakorlatok">10) Legjobb gyakorlatok</h2>
+
+<ul>
+<li><strong>Lezárás előtt</strong> ellenőrizd: részek összege ≈ beérkezett tömeg (különbözet rögzíthető automatikusan).</li>
+<li><strong>Csak nyitott tételt</strong> módosíts/törölj. Lezárás után a tétel <strong>archív</strong>.</li>
+<li><strong>Érintőn</strong>: nagyított vezérlők, számbillentyűzet használata.</li>
+<li><strong>Tárhely</strong>: csatolmányok tömörítése + bélyegkép; tárhely külön diszk/NAS.</li>
+<li><strong>Biztonság</strong>: PG jelszó <strong>Secrets/env</strong> – ne a UI-ba írd.</li>
+<li><strong>Mentés</strong>: <code>bontas.db</code> + csatolmány-könyvtár rendszeres backup.</li>
+</ul>
+
+<hr/>
+
+<h2 id="11-integracios-reszletek">11) Integrációs részletek</h2>
+
+<h3 id="11-1-vir-http-kuldes">11.1. VIR HTTP-küldés</h3>
+<ul>
+<li><code>POST</code> JSON, <code>Content-Type: application/json</code></li>
+<li>Fejlécek (opcionális): <code>X-API-Key</code>, <code>X-Signature</code> (HMAC-SHA256)</li>
+<li>Események: <code>part_created</code>, <code>batch_closed</code></li>
+</ul>
+
+<p><strong>Példa – <code>batch_closed</code> törzs (részlet):</strong></p>
+<pre><code class="lang-json">
+{
+  &quot;source&quot;: {&quot;system&quot;: &quot;Bontasinaplo&quot;},
+  &quot;event&quot;: &quot;batch_closed&quot;,
+  &quot;batch&quot;: {&quot;id&quot;: 123, &quot;animal&quot;: &quot;Sertés&quot;, &quot;gross_weight_kg&quot;: 300.0},
+  &quot;parts&quot;: [{&quot;name&quot;: &quot;Comb&quot;, &quot;weight_kg&quot;: 120.5}]
+}
+</code></pre>
+
+<h3 id="11-2-pg-outbox-api-api-bontasi-naplo">11.2. PG outbox → `api.api_bontasi_naplo`</h3>
+<ul>
+<li>Fogadó tábla (szerver):</li>
+</ul>
+<p><code>CREATE TABLE IF NOT EXISTS api.api_bontasi_naplo(id BIGSERIAL PRIMARY KEY, adat TEXT);</code></p>
+<ul>
+<li>Kliens: outbox sor, háttérküldő, visszavárakozás elérhetetlenség esetén.</li>
+</ul>
+
+<hr/>
+
+<h2 id="12-karbantartas-uzemeltetes">12) Karbantartás / üzemeltetés</h2>
+
+<ul>
+<li><strong>Naplók</strong>: küldési napló (UI), igény esetén fájl-log.</li>
+<li><strong>Frissítés</strong>: <code>pip install -r requirements.txt</code> futtatása új verzió után.</li>
+<li><strong>Automatikus indulás</strong>: Docker Compose vagy <code>systemd</code>.</li>
+<li><strong>Teljesítmény</strong>: PG pool finomhangolása, „Pool státusz” figyelése.</li>
+</ul>
+
+    <div class="footer-note">
+      Készült: 2025.08.13. • Bontásinapló — belső használatra.
+    </div>
+  </div>
+</body>
+</html>
